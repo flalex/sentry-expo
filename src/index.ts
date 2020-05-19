@@ -1,19 +1,23 @@
-/* @flow */
+import { ReactNativeOptions } from '@sentry/react-native';
 export * from '@sentry/react-native';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import * as Sentry from '@sentry/react-native';
 import { RewriteFrames } from '@sentry/integrations';
 
+export interface ExpoOptions extends ReactNativeOptions {
+  enableInExpoDevelopment?: boolean;
+}
+
 /**
  * Expo bundles are hosted on cloudfront. Expo bundle filename will change
  * at some point in the future in order to be able to delete this code.
  */
-function isPublishedExpoUrl(url) {
+function isPublishedExpoUrl(url: string) {
   return url.includes('https://d1wp6m56sqw74a.cloudfront.net');
 }
 
-function normalizeUrl(url) {
+function normalizeUrl(url: string) {
   if (isPublishedExpoUrl(url)) {
     return `app:///main.${Platform.OS}.bundle`;
   } else {
@@ -54,8 +58,7 @@ class ExpoIntegration {
       Sentry.setTag('expoSdkVersion', Constants.sdkVersion);
     }
 
-    const defaultHandler =
-      (ErrorUtils.getGlobalHandler && ErrorUtils.getGlobalHandler()) || ErrorUtils._globalHandler;
+    const defaultHandler = ErrorUtils.getGlobalHandler();
 
     ErrorUtils.setGlobalHandler((error, isFatal) => {
       // On Android, the Expo bundle filepath cannot be handled by TraceKit,
@@ -67,7 +70,7 @@ class ExpoIntegration {
         );
       }
 
-      Sentry.getCurrentHub().withScope(scope => {
+      Sentry.getCurrentHub().withScope((scope) => {
         if (isFatal) {
           scope.setLevel(Sentry.Severity.Fatal);
         }
@@ -77,24 +80,17 @@ class ExpoIntegration {
       });
 
       const client = Sentry.getCurrentHub().getClient();
-      // If in dev, we call the default handler anyway and hope the error will be sent
-      // Just for a better dev experience
       if (client && !__DEV__) {
-        client
-          .flush(client.getOptions().shutdownTimeout || 2000)
-          .then(() => {
-            defaultHandler(error, isFatal);
-          })
-          .catch(e => {
-            logger.error(e);
-          });
+        client.flush(2000).then(() => {
+          defaultHandler(error, isFatal);
+        });
       } else {
-        // If there is no client something is fishy, anyway we call the default handler
+        // If there is no client, something is fishy but we call the default handler anyway. Even if in dev
         defaultHandler(error, isFatal);
       }
     });
 
-    Sentry.addGlobalEventProcessor(function(event, hint) {
+    Sentry.addGlobalEventProcessor(function (event, _hint) {
       var that = Sentry.getCurrentHub().getIntegration(ExpoIntegration);
 
       if (that) {
@@ -102,7 +98,7 @@ class ExpoIntegration {
 
         if (Platform.OS === 'ios') {
           additionalDeviceInformation = {
-            model: Constants.platform.ios.model,
+            model: Constants.platform?.ios?.model,
           };
         } else {
           additionalDeviceInformation = {
@@ -129,16 +125,18 @@ class ExpoIntegration {
 }
 
 const originalSentryInit = Sentry.init;
-export const init = (options = {}) => {
+export const init = (options: ExpoOptions = {}) => {
   options.integrations = [
-    ...(options.integrations || []),
+    ...(typeof options.integrations === 'object'
+      ? options.integrations ?? []
+      : (options?.integrations ?? (() => []))([])),
     new Sentry.Integrations.ReactNativeErrorHandlers({
       onerror: false,
       onunhandledrejection: true,
     }),
     new ExpoIntegration(),
     new RewriteFrames({
-      iteratee: frame => {
+      iteratee: (frame) => {
         if (frame.filename) {
           frame.filename = normalizeUrl(frame.filename);
         }
